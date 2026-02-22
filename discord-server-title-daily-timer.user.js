@@ -134,10 +134,50 @@
     return null;
   }
 
-  function removeGuildIcon() {
+  function setGuildIconHidden(hidden) {
     const icon = document.querySelector('div[role="button"] div[class*="guildIcon_"]');
-    if (icon instanceof HTMLElement) {
-      icon.remove();
+    if (!(icon instanceof HTMLElement)) return;
+    if (hidden) {
+      if (!icon.hasAttribute('data-tm-icon-hidden')) {
+        icon.setAttribute('data-tm-icon-hidden', '1');
+        icon.setAttribute('data-tm-prev-display', icon.style.display || '');
+      }
+      icon.style.display = 'none';
+      return;
+    }
+    if (icon.hasAttribute('data-tm-icon-hidden')) {
+      icon.style.display = icon.getAttribute('data-tm-prev-display') || '';
+      icon.removeAttribute('data-tm-prev-display');
+      icon.removeAttribute('data-tm-icon-hidden');
+    }
+  }
+
+  function restoreNativeTitle(titleEl) {
+    if (!(titleEl instanceof HTMLElement)) return;
+    if (titleEl.getAttribute('data-tm-overridden') === '1') {
+      titleEl.textContent = titleEl.getAttribute('data-tm-original-text') || titleEl.textContent;
+      const originalFontSize = titleEl.getAttribute('data-tm-original-font-size');
+      titleEl.style.fontSize = originalFontSize === null ? '' : originalFontSize;
+      titleEl.style.fontVariantNumeric = '';
+      titleEl.style.fontFeatureSettings = '';
+      titleEl.removeAttribute('data-tm-overridden');
+      titleEl.removeAttribute('data-tm-original-text');
+      titleEl.removeAttribute('data-tm-original-font-size');
+    }
+  }
+
+  function applyCustomTitle(titleEl, text) {
+    if (!(titleEl instanceof HTMLElement)) return;
+    if (titleEl.getAttribute('data-tm-overridden') !== '1') {
+      titleEl.setAttribute('data-tm-overridden', '1');
+      titleEl.setAttribute('data-tm-original-text', titleEl.textContent || '');
+      titleEl.setAttribute('data-tm-original-font-size', titleEl.style.fontSize || '');
+    }
+    titleEl.style.fontSize = `${settings.fontSize}px`;
+    titleEl.style.fontVariantNumeric = 'tabular-nums';
+    titleEl.style.fontFeatureSettings = '"tnum" 1';
+    if (titleEl.textContent !== text) {
+      titleEl.textContent = text;
     }
   }
 
@@ -567,7 +607,6 @@
   }
 
   function render() {
-    removeGuildIcon();
     ensureGearButton();
     if (tooltipAnchorEl instanceof HTMLElement && !document.body.contains(tooltipAnchorEl)) {
       hideTooltip();
@@ -578,18 +617,19 @@
 
     const titleEl = findTitleEl();
     if (!titleEl) return;
-    titleEl.style.fontSize = `${settings.fontSize}px`;
-    titleEl.style.fontVariantNumeric = 'tabular-nums';
-    titleEl.style.fontFeatureSettings = '"tnum" 1';
     const gap = '\u00A0\u00A0\u00A0\u00A0\u00A0';
     const parts = [];
     if (settings.showOpen) parts.push(`${formatHMS(openMs)} open`);
     if (settings.showFocus) parts.push(`${formatHMS(focusedMs)} focus`);
     if (settings.showSwitches) parts.push(`${switchCount} switches`);
-    const nextText = parts.length > 0 ? parts.join(`${gap}|${gap}`) : 'Daily Timer';
-    if (titleEl.textContent !== nextText) {
-      titleEl.textContent = nextText;
+    if (parts.length === 0) {
+      setGuildIconHidden(false);
+      restoreNativeTitle(titleEl);
+      return;
     }
+    setGuildIconHidden(true);
+    const nextText = parts.join(`${gap}|${gap}`);
+    applyCustomTitle(titleEl, nextText);
   }
 
   let renderScheduled = false;
