@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Discord Server Title + Daily Timer
-// @version      1.8.5
+// @version      1.9.0
 // @description  Replace server title and show today's Discord time
 // @match        https://discord.com/channels/*
 // @run-at       document-idle
@@ -14,6 +14,8 @@
   const LEGACY_FOCUSED_STORAGE_PREFIX = 'tm_discord_daily_ms_';
   const OPEN_STORAGE_PREFIX = 'tm_discord_daily_open_ms_';
   const SWITCH_STORAGE_PREFIX = 'tm_discord_daily_switches_';
+  const SETTINGS_STORAGE_KEY = 'tm_discord_daily_settings_v1';
+  const DEFAULT_FONT_SIZE = 16;
 
   function todayKey() {
     const d = new Date();
@@ -72,6 +74,32 @@
     localStorage.setItem(switchStorageKey(dateKey), String(Math.floor(count)));
   }
 
+  function clampFontSize(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return DEFAULT_FONT_SIZE;
+    return Math.min(40, Math.max(10, Math.round(n)));
+  }
+
+  function loadSettings() {
+    let parsed = {};
+    try {
+      const raw = localStorage.getItem(SETTINGS_STORAGE_KEY);
+      if (raw) parsed = JSON.parse(raw);
+    } catch (_) {
+      parsed = {};
+    }
+    return {
+      showOpen: parsed.showOpen !== false,
+      showFocus: parsed.showFocus !== false,
+      showSwitches: parsed.showSwitches !== false,
+      fontSize: clampFontSize(parsed.fontSize)
+    };
+  }
+
+  function saveSettings() {
+    localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+  }
+
   function formatHMS(ms) {
     const total = Math.floor(ms / 1000);
     const h = Math.floor(total / 3600);
@@ -113,6 +141,343 @@
     }
   }
 
+  let settings = loadSettings();
+  let popupEl = null;
+  let popupAnchorEl = null;
+  let tooltipEl = null;
+  let tooltipAnchorEl = null;
+  let tooltipShowTimer = 0;
+
+  function positionTooltip() {
+    if (!(tooltipEl instanceof HTMLElement) || !(tooltipAnchorEl instanceof HTMLElement)) return;
+    const rect = tooltipAnchorEl.getBoundingClientRect();
+    const margin = 8;
+    const maxLeft = window.innerWidth - tooltipEl.offsetWidth - margin;
+    const nextLeft = Math.max(margin, Math.min(maxLeft, rect.left + (rect.width / 2) - (tooltipEl.offsetWidth / 2)));
+    let nextTop = rect.top - tooltipEl.offsetHeight - margin;
+    if (nextTop < margin) {
+      nextTop = rect.bottom + margin;
+      tooltipEl.setAttribute('data-tm-placement', 'bottom');
+    } else {
+      tooltipEl.setAttribute('data-tm-placement', 'top');
+    }
+    tooltipEl.style.left = `${Math.round(nextLeft)}px`;
+    tooltipEl.style.top = `${Math.round(nextTop)}px`;
+  }
+
+  function hideTooltip() {
+    if (tooltipShowTimer) {
+      clearTimeout(tooltipShowTimer);
+      tooltipShowTimer = 0;
+    }
+    if (tooltipEl instanceof HTMLElement) {
+      tooltipEl.remove();
+    }
+    tooltipEl = null;
+    tooltipAnchorEl = null;
+  }
+
+  function showTooltip(anchorEl, text) {
+    hideTooltip();
+    tooltipAnchorEl = anchorEl;
+
+    const el = document.createElement('div');
+    el.setAttribute('data-tm-tooltip', '1');
+    el.setAttribute('role', 'tooltip');
+    el.style.position = 'fixed';
+    el.style.zIndex = '10001';
+    el.style.pointerEvents = 'none';
+    el.style.background = 'var(--background-floating, #111214)';
+    el.style.color = 'var(--text-normal, #f2f3f5)';
+    el.style.border = '1px solid var(--background-modifier-accent, rgba(255,255,255,0.12))';
+    el.style.borderRadius = '6px';
+    el.style.padding = '6px 8px';
+    el.style.fontFamily = 'var(--font-primary, "gg sans", "Noto Sans", sans-serif)';
+    el.style.fontSize = '12px';
+    el.style.fontWeight = '500';
+    el.style.lineHeight = '1';
+    el.style.boxShadow = '0 8px 24px rgba(0,0,0,0.35)';
+    el.style.opacity = '0';
+    el.style.transform = 'translateY(2px)';
+    el.style.transition = 'opacity 120ms ease, transform 120ms ease';
+
+    const textEl = document.createElement('div');
+    textEl.textContent = text;
+    el.appendChild(textEl);
+
+    const arrow = document.createElement('div');
+    arrow.setAttribute('data-tm-tooltip-arrow', '1');
+    arrow.style.position = 'absolute';
+    arrow.style.width = '8px';
+    arrow.style.height = '8px';
+    arrow.style.background = 'var(--background-floating, #111214)';
+    arrow.style.borderLeft = '1px solid var(--background-modifier-accent, rgba(255,255,255,0.12))';
+    arrow.style.borderTop = '1px solid var(--background-modifier-accent, rgba(255,255,255,0.12))';
+    arrow.style.transform = 'rotate(45deg)';
+    el.appendChild(arrow);
+
+    tooltipEl = el;
+    document.body.appendChild(el);
+    positionTooltip();
+
+    const placement = el.getAttribute('data-tm-placement');
+    if (placement === 'bottom') {
+      arrow.style.top = '-5px';
+      arrow.style.left = 'calc(50% - 4px)';
+    } else {
+      arrow.style.bottom = '-5px';
+      arrow.style.left = 'calc(50% - 4px)';
+      arrow.style.transform = 'rotate(225deg)';
+    }
+
+    requestAnimationFrame(() => {
+      if (!(tooltipEl instanceof HTMLElement)) return;
+      tooltipEl.style.opacity = '1';
+      tooltipEl.style.transform = 'translateY(0)';
+    });
+  }
+
+  function scheduleTooltip(anchorEl, text) {
+    if (tooltipShowTimer) clearTimeout(tooltipShowTimer);
+    tooltipShowTimer = setTimeout(() => {
+      tooltipShowTimer = 0;
+      showTooltip(anchorEl, text);
+    }, 350);
+  }
+
+  function positionPopup() {
+    if (!(popupEl instanceof HTMLElement) || !(popupAnchorEl instanceof HTMLElement)) return;
+    const rect = popupAnchorEl.getBoundingClientRect();
+    const margin = 8;
+    const maxLeft = window.innerWidth - popupEl.offsetWidth - margin;
+    const nextLeft = Math.max(margin, Math.min(maxLeft, rect.right - popupEl.offsetWidth));
+    popupEl.style.top = `${Math.round(rect.bottom + margin)}px`;
+    popupEl.style.left = `${Math.round(nextLeft)}px`;
+  }
+
+  function closePopup() {
+    if (!(popupEl instanceof HTMLElement)) return;
+    popupEl.remove();
+    popupEl = null;
+    if (popupAnchorEl instanceof HTMLElement) {
+      popupAnchorEl.setAttribute('aria-expanded', 'false');
+    }
+    popupAnchorEl = null;
+  }
+
+  function buildPopup(anchorEl) {
+    const panel = document.createElement('div');
+    panel.setAttribute('data-tm-popup', '1');
+    panel.setAttribute('role', 'dialog');
+    panel.setAttribute('aria-label', 'Daily Timer Settings');
+    panel.setAttribute('aria-modal', 'true');
+    panel.setAttribute('tabindex', '-1');
+    panel.style.position = 'fixed';
+    panel.style.zIndex = '10000';
+    panel.style.width = '320px';
+    panel.style.background = 'var(--background-floating, #2b2d31)';
+    panel.style.border = '1px solid var(--background-modifier-accent, rgba(255,255,255,0.12))';
+    panel.style.borderRadius = '10px';
+    panel.style.boxShadow = '0 12px 28px rgba(0, 0, 0, 0.42)';
+    panel.style.overflow = 'hidden';
+    panel.style.color = 'var(--header-primary, #f2f3f5)';
+    panel.style.fontFamily = 'var(--font-primary, "gg sans", "Noto Sans", sans-serif)';
+    panel.style.opacity = '0';
+    panel.style.transform = 'translateY(-3px)';
+    panel.style.transition = 'opacity 120ms ease, transform 120ms ease';
+
+    const header = document.createElement('div');
+    header.style.display = 'flex';
+    header.style.alignItems = 'center';
+    header.style.gap = '8px';
+    header.style.padding = '10px 12px';
+    header.style.borderBottom = '1px solid var(--background-modifier-accent, rgba(255,255,255,0.08))';
+
+    const headerIcon = document.createElement('div');
+    headerIcon.style.display = 'inline-flex';
+    headerIcon.style.alignItems = 'center';
+    headerIcon.style.justifyContent = 'center';
+    headerIcon.style.color = 'var(--interactive-normal, #b5bac1)';
+    headerIcon.innerHTML = '<svg aria-hidden="true" role="img" xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="none" viewBox="0 0 24 24"><path fill="currentColor" fill-rule="evenodd" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm1 4.5a1 1 0 1 0-2 0V12c0 .27.11.52.3.7l3 3a1 1 0 1 0 1.4-1.4L13 11.58V6.5Z" clip-rule="evenodd"></path></svg>';
+
+    const title = document.createElement('h1');
+    title.textContent = 'Daily Timer';
+    title.style.margin = '0';
+    title.style.fontSize = '16px';
+    title.style.lineHeight = '20px';
+    title.style.fontWeight = '600';
+    title.style.color = 'var(--interactive-text-active, #ffffff)';
+
+    const githubLink = document.createElement('a');
+    githubLink.href = 'https://github.com/KianBahasadri/discord-daily-timer-userscript/tree/main';
+    githubLink.target = '_blank';
+    githubLink.rel = 'noreferrer noopener';
+    githubLink.setAttribute('aria-label', 'Open GitHub repository');
+    githubLink.style.marginLeft = 'auto';
+    githubLink.style.display = 'inline-flex';
+    githubLink.style.alignItems = 'center';
+    githubLink.style.justifyContent = 'center';
+    githubLink.style.color = 'var(--interactive-normal, #b5bac1)';
+    githubLink.style.textDecoration = 'none';
+    githubLink.innerHTML = '<svg aria-hidden="true" role="img" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.5-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"></path></svg>';
+
+    header.appendChild(headerIcon);
+    header.appendChild(title);
+    header.appendChild(githubLink);
+    panel.appendChild(header);
+
+    const body = document.createElement('div');
+    body.style.padding = '10px 12px 12px';
+    body.style.display = 'flex';
+    body.style.flexDirection = 'column';
+    body.style.gap = '6px';
+    panel.appendChild(body);
+
+    const makeToggle = (labelText, settingKey) => {
+      const row = document.createElement('label');
+      row.style.display = 'flex';
+      row.style.alignItems = 'center';
+      row.style.gap = '8px';
+      row.style.padding = '4px 0';
+      row.style.fontSize = '13px';
+      row.style.cursor = 'pointer';
+
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      input.checked = Boolean(settings[settingKey]);
+      input.style.width = '14px';
+      input.style.height = '14px';
+      input.style.accentColor = 'var(--brand-500, #5865f2)';
+      input.addEventListener('change', () => {
+        settings[settingKey] = input.checked;
+        saveSettings();
+        render();
+      });
+
+      const text = document.createElement('span');
+      text.textContent = labelText;
+
+      row.appendChild(input);
+      row.appendChild(text);
+      return row;
+    };
+
+    body.appendChild(makeToggle('Show open timer', 'showOpen'));
+    body.appendChild(makeToggle('Show focus timer', 'showFocus'));
+    body.appendChild(makeToggle('Show switches count', 'showSwitches'));
+
+    const sizeLabel = document.createElement('div');
+    sizeLabel.textContent = 'Font size';
+    sizeLabel.style.fontSize = '12px';
+    sizeLabel.style.marginTop = '8px';
+    sizeLabel.style.marginBottom = '2px';
+    sizeLabel.style.color = 'var(--text-muted, #b5bac1)';
+    sizeLabel.style.textTransform = 'uppercase';
+    sizeLabel.style.letterSpacing = '0.02em';
+    sizeLabel.style.fontWeight = '700';
+    body.appendChild(sizeLabel);
+
+    const sizeRow = document.createElement('div');
+    sizeRow.style.display = 'flex';
+    sizeRow.style.alignItems = 'center';
+    sizeRow.style.gap = '8px';
+
+    const slider = document.createElement('input');
+    slider.type = 'range';
+    slider.min = '10';
+    slider.max = '40';
+    slider.value = String(settings.fontSize);
+    slider.style.flex = '1';
+    slider.style.accentColor = 'var(--brand-500, #5865f2)';
+
+    const numberInput = document.createElement('input');
+    numberInput.type = 'number';
+    numberInput.min = '10';
+    numberInput.max = '40';
+    numberInput.value = String(settings.fontSize);
+    numberInput.style.width = '56px';
+    numberInput.style.background = 'var(--background-tertiary, #1e1f22)';
+    numberInput.style.color = 'var(--header-primary, #f2f3f5)';
+    numberInput.style.border = '1px solid var(--background-modifier-accent, rgba(255,255,255,0.12))';
+    numberInput.style.borderRadius = '4px';
+    numberInput.style.padding = '4px';
+    numberInput.style.fontSize = '12px';
+    numberInput.style.fontWeight = '600';
+
+    const syncFontSize = (value) => {
+      if (value === '') return;
+      const next = clampFontSize(value);
+      settings.fontSize = next;
+      slider.value = String(next);
+      numberInput.value = String(next);
+      saveSettings();
+      render();
+    };
+
+    slider.addEventListener('input', () => syncFontSize(slider.value));
+    numberInput.addEventListener('input', () => syncFontSize(numberInput.value));
+    numberInput.addEventListener('change', () => syncFontSize(numberInput.value));
+
+    sizeRow.appendChild(slider);
+    sizeRow.appendChild(numberInput);
+    body.appendChild(sizeRow);
+
+    const onPointerDown = (event) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (panel.contains(target)) return;
+      if (anchorEl.contains(target)) return;
+      closePopup();
+    };
+
+    const onEsc = (event) => {
+      if (event.key === 'Escape') {
+        closePopup();
+      }
+    };
+
+    const onViewportChange = () => {
+      positionPopup();
+    };
+
+    const originalClosePopup = closePopup;
+    closePopup = function closeAndCleanup() {
+      if (!(popupEl instanceof HTMLElement)) return;
+      document.removeEventListener('mousedown', onPointerDown, true);
+      document.removeEventListener('keydown', onEsc, true);
+      window.removeEventListener('resize', onViewportChange);
+      window.removeEventListener('scroll', onViewportChange, true);
+      originalClosePopup();
+      closePopup = originalClosePopup;
+    };
+
+    document.addEventListener('mousedown', onPointerDown, true);
+    document.addEventListener('keydown', onEsc, true);
+    window.addEventListener('resize', onViewportChange);
+    window.addEventListener('scroll', onViewportChange, true);
+
+    requestAnimationFrame(() => {
+      panel.style.opacity = '1';
+      panel.style.transform = 'translateY(0)';
+      panel.focus();
+    });
+
+    return panel;
+  }
+
+  function togglePopup(anchorEl) {
+    hideTooltip();
+    if (popupEl instanceof HTMLElement) {
+      closePopup();
+      return;
+    }
+    popupAnchorEl = anchorEl;
+    popupEl = buildPopup(anchorEl);
+    document.body.appendChild(popupEl);
+    anchorEl.setAttribute('aria-expanded', 'true');
+    positionPopup();
+  }
+
   function ensureGearButton() {
     const trailing = document.querySelector('div[class*="trailing_"]');
     if (!(trailing instanceof HTMLElement)) return;
@@ -134,12 +499,26 @@
     gearButton.setAttribute('role', 'button');
     gearButton.setAttribute('tabindex', '0');
     gearButton.setAttribute('aria-label', 'Daily Timer');
+    gearButton.setAttribute('aria-haspopup', 'dialog');
+    gearButton.setAttribute('aria-expanded', 'false');
     gearButton.className = helpButton instanceof HTMLElement ? helpButton.className : inboxButton.className;
     gearButton.style.display = 'inline-flex';
     gearButton.style.alignItems = 'center';
     gearButton.style.justifyContent = 'center';
+    gearButton.style.cursor = 'pointer';
     gearButton.style.marginRight = '0';
     gearButton.innerHTML = '<svg x="0" y="0" class="icon__9293f" aria-hidden="true" role="img" xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="none" viewBox="0 0 24 24"><path fill="currentColor" fill-rule="evenodd" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm1 4.5a1 1 0 1 0-2 0V12c0 .27.11.52.3.7l3 3a1 1 0 1 0 1.4-1.4L13 11.58V6.5Z" clip-rule="evenodd"></path></svg>';
+    gearButton.addEventListener('click', () => togglePopup(gearButton));
+    gearButton.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        togglePopup(gearButton);
+      }
+    });
+    gearButton.addEventListener('mouseenter', () => scheduleTooltip(gearButton, 'Daily Timer'));
+    gearButton.addEventListener('mouseleave', hideTooltip);
+    gearButton.addEventListener('focus', () => scheduleTooltip(gearButton, 'Daily Timer'));
+    gearButton.addEventListener('blur', hideTooltip);
 
     trailing.insertBefore(gearButton, inboxButton);
   }
@@ -192,14 +571,24 @@
   function render() {
     removeGuildIcon();
     ensureGearButton();
+    if (tooltipAnchorEl instanceof HTMLElement && !document.body.contains(tooltipAnchorEl)) {
+      hideTooltip();
+    }
+    if (popupAnchorEl instanceof HTMLElement && !document.body.contains(popupAnchorEl)) {
+      closePopup();
+    }
 
     const titleEl = findTitleEl();
     if (!titleEl) return;
-    titleEl.style.fontSize = '16px';
+    titleEl.style.fontSize = `${settings.fontSize}px`;
     titleEl.style.fontVariantNumeric = 'tabular-nums';
     titleEl.style.fontFeatureSettings = '"tnum" 1';
     const gap = '\u00A0\u00A0\u00A0\u00A0\u00A0';
-    const nextText = `${formatHMS(openMs)} open${gap}|${gap}${formatHMS(focusedMs)} focus${gap}|${gap}${switchCount} switches`;
+    const parts = [];
+    if (settings.showOpen) parts.push(`${formatHMS(openMs)} open`);
+    if (settings.showFocus) parts.push(`${formatHMS(focusedMs)} focus`);
+    if (settings.showSwitches) parts.push(`${switchCount} switches`);
+    const nextText = parts.length > 0 ? parts.join(`${gap}|${gap}`) : 'Daily Timer';
     if (titleEl.textContent !== nextText) {
       titleEl.textContent = nextText;
     }
