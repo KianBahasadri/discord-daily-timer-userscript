@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Discord Server Title + Daily Timer
-// @version      1.7.0
+// @version      1.8.5
 // @description  Replace server title and show today's Discord time
 // @match        https://discord.com/channels/*
 // @run-at       document-idle
@@ -106,6 +106,44 @@
     return null;
   }
 
+  function removeGuildIcon() {
+    const icon = document.querySelector('div[role="button"] div[class*="guildIcon_"]');
+    if (icon instanceof HTMLElement) {
+      icon.remove();
+    }
+  }
+
+  function ensureGearButton() {
+    const trailing = document.querySelector('div[class*="trailing_"]');
+    if (!(trailing instanceof HTMLElement)) return;
+
+    const existing = trailing.querySelector('[data-tm-gear="1"]');
+    if (existing instanceof HTMLElement) {
+      if (existing.getAttribute('data-tm-icon') === 'clock' && existing.querySelector('svg')) return;
+      existing.remove();
+    }
+
+    const inboxButton = trailing.querySelector('[aria-label="Inbox"][role="button"], [aria-label="Inbox"]');
+    if (!(inboxButton instanceof HTMLElement)) return;
+
+    const helpButton = trailing.querySelector('[aria-label="Help"][role="button"], [aria-label="Help"]');
+
+    const gearButton = document.createElement('div');
+    gearButton.setAttribute('data-tm-gear', '1');
+    gearButton.setAttribute('data-tm-icon', 'clock');
+    gearButton.setAttribute('role', 'button');
+    gearButton.setAttribute('tabindex', '0');
+    gearButton.setAttribute('aria-label', 'Daily Timer');
+    gearButton.className = helpButton instanceof HTMLElement ? helpButton.className : inboxButton.className;
+    gearButton.style.display = 'inline-flex';
+    gearButton.style.alignItems = 'center';
+    gearButton.style.justifyContent = 'center';
+    gearButton.style.marginRight = '0';
+    gearButton.innerHTML = '<svg x="0" y="0" class="icon__9293f" aria-hidden="true" role="img" xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="none" viewBox="0 0 24 24"><path fill="currentColor" fill-rule="evenodd" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm1 4.5a1 1 0 1 0-2 0V12c0 .27.11.52.3.7l3 3a1 1 0 1 0 1.4-1.4L13 11.58V6.5Z" clip-rule="evenodd"></path></svg>';
+
+    trailing.insertBefore(gearButton, inboxButton);
+  }
+
   let key = todayKey();
   let focusedMs = loadFocusedMs(key);
   let openMs = loadOpenMs(key);
@@ -152,6 +190,9 @@
   }
 
   function render() {
+    removeGuildIcon();
+    ensureGearButton();
+
     const titleEl = findTitleEl();
     if (!titleEl) return;
     titleEl.style.fontSize = '16px';
