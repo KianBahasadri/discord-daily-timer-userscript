@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Discord Server Title + Daily Timer
-// @version      1.9.0
+// @version      1.11.0
 // @description  Replace server title and show today's Discord time
 // @match        https://discord.com/channels/*
 // @run-at       document-idle
@@ -15,7 +15,9 @@
   const OPEN_STORAGE_PREFIX = 'tm_discord_daily_open_ms_';
   const SWITCH_STORAGE_PREFIX = 'tm_discord_daily_switches_';
   const SETTINGS_STORAGE_KEY = 'tm_discord_daily_settings_v1';
+  const HISTORY_STORAGE_KEY = 'tm_discord_daily_history_v1';
   const DEFAULT_FONT_SIZE = 16;
+  const SYSTEM_THEME_QUERY = '(prefers-color-scheme: dark)';
 
   function todayKey() {
     const d = new Date();
@@ -23,6 +25,72 @@
     const m = String(d.getMonth() + 1).padStart(2, '0');
     const day = String(d.getDate()).padStart(2, '0');
     return `${y}-${m}-${day}`;
+  }
+
+  function dateKeyDaysAgo(daysAgo) {
+    const d = new Date();
+    d.setHours(12, 0, 0, 0);
+    d.setDate(d.getDate() - daysAgo);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  }
+
+  function parseDateKey(dateKey) {
+    const [y, m, d] = dateKey.split('-').map((part) => Number(part));
+    return new Date(y, (m || 1) - 1, d || 1, 12, 0, 0, 0);
+  }
+
+  function usageDayLabel(daysAgo, dateKey) {
+    if (daysAgo === 0) return 'Today';
+    if (daysAgo === 1) return 'Yesterday';
+    const d = parseDateKey(dateKey);
+    return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+  }
+
+  function isDateKey(dateKey) {
+    return /^\d{4}-\d{2}-\d{2}$/.test(dateKey);
+  }
+
+  function isDarkSystemTheme() {
+    return window.matchMedia(SYSTEM_THEME_QUERY).matches;
+  }
+
+  function applyThemeVariables(targetEl) {
+    if (!(targetEl instanceof HTMLElement)) return;
+    const dark = isDarkSystemTheme();
+    const vars = dark
+      ? {
+          '--background-floating': '#2b2d31',
+          '--background-secondary-alt': '#232428',
+          '--background-tertiary': '#1e1f22',
+          '--background-modifier-accent': 'rgba(255,255,255,0.12)',
+          '--text-normal': '#f2f3f5',
+          '--header-primary': '#f2f3f5',
+          '--interactive-text-active': '#ffffff',
+          '--interactive-normal': '#b5bac1',
+          '--interactive-active': '#ffffff',
+          '--text-muted': '#b5bac1',
+          '--brand-500': '#5865f2'
+        }
+      : {
+          '--background-floating': '#ffffff',
+          '--background-secondary-alt': '#f2f4f8',
+          '--background-tertiary': '#ffffff',
+          '--background-modifier-accent': 'rgba(15,23,42,0.18)',
+          '--text-normal': '#111827',
+          '--header-primary': '#111827',
+          '--interactive-text-active': '#0f172a',
+          '--interactive-normal': '#4b5563',
+          '--interactive-active': '#111827',
+          '--text-muted': '#6b7280',
+          '--brand-500': '#2563eb'
+        };
+
+    for (const [key, value] of Object.entries(vars)) {
+      targetEl.style.setProperty(key, value);
+    }
   }
 
   function focusedStorageKey(dateKey) {
@@ -72,6 +140,147 @@
 
   function saveSwitchCount(dateKey, count) {
     localStorage.setItem(switchStorageKey(dateKey), String(Math.floor(count)));
+  }
+
+  function loadHistory() {
+    try {
+      const raw = localStorage.getItem(HISTORY_STORAGE_KEY);
+      if (!raw) return { days: {} };
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object' || !parsed.days || typeof parsed.days !== 'object') {
+        return { days: {} };
+      }
+      const days = {};
+      for (const [dateKey, value] of Object.entries(parsed.days)) {
+        if (!isDateKey(dateKey)) continue;
+        const openMs = Number(value && value.openMs);
+        const focusedMs = Number(value && value.focusedMs);
+        const switches = Number(value && value.switches);
+        days[dateKey] = {
+          openMs: Number.isFinite(openMs) && openMs >= 0 ? Math.floor(openMs) : 0,
+          focusedMs: Number.isFinite(focusedMs) && focusedMs >= 0 ? Math.floor(focusedMs) : 0,
+          switches: Number.isFinite(switches) && switches >= 0 ? Math.floor(switches) : 0
+        };
+      }
+      return { days };
+    } catch (_) {
+      return { days: {} };
+    }
+  }
+
+  function saveHistory() {
+    localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(history));
+  }
+
+  function dateKeyFromStorageKey(storageKey, prefix) {
+    if (!storageKey.startsWith(prefix)) return null;
+    const dateKey = storageKey.slice(prefix.length);
+    return isDateKey(dateKey) ? dateKey : null;
+  }
+
+  function collectKnownDateKeysFromStorage() {
+    const keys = new Set(Object.keys(history.days || {}));
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const storageKey = localStorage.key(i);
+      if (!storageKey) continue;
+      const dateKey =
+        dateKeyFromStorageKey(storageKey, FOCUSED_STORAGE_PREFIX)
+        || dateKeyFromStorageKey(storageKey, LEGACY_FOCUSED_STORAGE_PREFIX)
+        || dateKeyFromStorageKey(storageKey, OPEN_STORAGE_PREFIX)
+        || dateKeyFromStorageKey(storageKey, SWITCH_STORAGE_PREFIX);
+      if (dateKey) keys.add(dateKey);
+    }
+    return keys;
+  }
+
+  function upsertHistoryDay(dateKey, openMsValue, focusedMsValue, switchesValue) {
+    const next = {
+      openMs: Math.max(0, Math.floor(openMsValue)),
+      focusedMs: Math.max(0, Math.floor(focusedMsValue)),
+      switches: Math.max(0, Math.floor(switchesValue))
+    };
+    const prev = history.days[dateKey];
+    if (
+      prev
+      && prev.openMs === next.openMs
+      && prev.focusedMs === next.focusedMs
+      && prev.switches === next.switches
+    ) {
+      return false;
+    }
+    history.days[dateKey] = next;
+    return true;
+  }
+
+  function syncHistoryFromLegacyStorage() {
+    let changed = false;
+    const dateKeys = collectKnownDateKeysFromStorage();
+    for (const dateKey of dateKeys) {
+      const nextOpenMs = loadOpenMs(dateKey);
+      const nextFocusedMs = loadFocusedMs(dateKey);
+      const nextSwitches = loadSwitchCount(dateKey);
+      changed = upsertHistoryDay(dateKey, nextOpenMs, nextFocusedMs, nextSwitches) || changed;
+    }
+    if (changed) saveHistory();
+  }
+
+  function recordCurrentDayHistory() {
+    if (upsertHistoryDay(key, openMs, focusedMs, switchCount)) {
+      saveHistory();
+    }
+  }
+
+  function allHistoryEntries() {
+    return Object.entries(history.days)
+      .map(([dateKey, values]) => ({ dateKey, ...values }))
+      .sort((a, b) => (a.dateKey < b.dateKey ? 1 : -1));
+  }
+
+  function averageEntries(entries) {
+    if (!entries.length) {
+      return { openMs: 0, focusedMs: 0, switches: 0, days: 0 };
+    }
+    let openTotal = 0;
+    let focusedTotal = 0;
+    let switchesTotal = 0;
+    for (const entry of entries) {
+      openTotal += entry.openMs;
+      focusedTotal += entry.focusedMs;
+      switchesTotal += entry.switches;
+    }
+    return {
+      openMs: Math.floor(openTotal / entries.length),
+      focusedMs: Math.floor(focusedTotal / entries.length),
+      switches: Math.floor(switchesTotal / entries.length),
+      days: entries.length
+    };
+  }
+
+  function downloadHistoryCsv() {
+    const rows = allHistoryEntries().sort((a, b) => (a.dateKey > b.dateKey ? 1 : -1));
+    const lines = [
+      'date,open_ms,focused_ms,switches,open_hms,focused_hms'
+    ];
+    for (const row of rows) {
+      lines.push([
+        row.dateKey,
+        row.openMs,
+        row.focusedMs,
+        row.switches,
+        formatHMS(row.openMs),
+        formatHMS(row.focusedMs)
+      ].join(','));
+    }
+    const csv = `${lines.join('\n')}\n`;
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `discord-usage-export-${todayKey()}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
   }
 
   function clampFontSize(value) {
@@ -182,8 +391,12 @@
   }
 
   let settings = loadSettings();
+  let history = loadHistory();
   let popupEl = null;
   let popupAnchorEl = null;
+  let activePopupTab = 'settings';
+  let isRefreshingPopupTheme = false;
+  let refreshPopupUsage = null;
   let tooltipEl = null;
   let tooltipAnchorEl = null;
   let tooltipShowTimer = 0;
@@ -240,6 +453,7 @@
     el.style.opacity = '0';
     el.style.transform = 'translateY(2px)';
     el.style.transition = 'opacity 120ms ease, transform 120ms ease';
+    applyThemeVariables(el);
 
     const textEl = document.createElement('div');
     textEl.textContent = text;
@@ -300,6 +514,7 @@
     if (!(popupEl instanceof HTMLElement)) return;
     popupEl.remove();
     popupEl = null;
+    refreshPopupUsage = null;
     if (popupAnchorEl instanceof HTMLElement) {
       popupAnchorEl.setAttribute('aria-expanded', 'false');
     }
@@ -326,6 +541,7 @@
     panel.style.opacity = '0';
     panel.style.transform = 'translateY(-3px)';
     panel.style.transition = 'opacity 120ms ease, transform 120ms ease';
+    applyThemeVariables(panel);
 
     const header = document.createElement('div');
     header.style.display = 'flex';
@@ -363,12 +579,54 @@
     header.appendChild(githubLink);
     panel.appendChild(header);
 
-    const body = document.createElement('div');
-    body.style.padding = '10px 12px 12px';
-    body.style.display = 'flex';
-    body.style.flexDirection = 'column';
-    body.style.gap = '6px';
-    panel.appendChild(body);
+    const tabs = document.createElement('div');
+    tabs.style.display = 'grid';
+    tabs.style.gridTemplateColumns = '1fr 1fr';
+    tabs.style.borderBottom = '1px solid var(--background-modifier-accent, rgba(255,255,255,0.08))';
+    panel.appendChild(tabs);
+
+    const tabSettings = document.createElement('button');
+    tabSettings.setAttribute('data-tm-tab', 'settings');
+    tabSettings.type = 'button';
+    tabSettings.textContent = 'Settings';
+    tabSettings.style.border = '0';
+    tabSettings.style.background = 'transparent';
+    tabSettings.style.color = 'var(--interactive-normal, #b5bac1)';
+    tabSettings.style.padding = '10px 8px';
+    tabSettings.style.fontSize = '13px';
+    tabSettings.style.fontWeight = '700';
+    tabSettings.style.cursor = 'pointer';
+
+    const tabUsage = document.createElement('button');
+    tabUsage.setAttribute('data-tm-tab', 'usage');
+    tabUsage.type = 'button';
+    tabUsage.textContent = 'Usage';
+    tabUsage.style.border = '0';
+    tabUsage.style.background = 'transparent';
+    tabUsage.style.color = 'var(--interactive-normal, #b5bac1)';
+    tabUsage.style.padding = '10px 8px';
+    tabUsage.style.fontSize = '13px';
+    tabUsage.style.fontWeight = '700';
+    tabUsage.style.cursor = 'pointer';
+
+    tabs.appendChild(tabSettings);
+    tabs.appendChild(tabUsage);
+
+    const content = document.createElement('div');
+    content.style.padding = '10px 12px 12px';
+    panel.appendChild(content);
+
+    const settingsPanel = document.createElement('div');
+    settingsPanel.style.display = 'flex';
+    settingsPanel.style.flexDirection = 'column';
+    settingsPanel.style.gap = '6px';
+    content.appendChild(settingsPanel);
+
+    const usagePanel = document.createElement('div');
+    usagePanel.style.display = 'none';
+    usagePanel.style.flexDirection = 'column';
+    usagePanel.style.gap = '8px';
+    content.appendChild(usagePanel);
 
     const makeToggle = (labelText, settingKey) => {
       const row = document.createElement('label');
@@ -400,9 +658,9 @@
       return row;
     };
 
-    body.appendChild(makeToggle('Open timer', 'showOpen'));
-    body.appendChild(makeToggle('Focus timer', 'showFocus'));
-    body.appendChild(makeToggle('Switches count', 'showSwitches'));
+    settingsPanel.appendChild(makeToggle('Open timer', 'showOpen'));
+    settingsPanel.appendChild(makeToggle('Focus timer', 'showFocus'));
+    settingsPanel.appendChild(makeToggle('Switches count', 'showSwitches'));
 
     const sizeLabel = document.createElement('div');
     sizeLabel.textContent = 'Font size';
@@ -413,7 +671,7 @@
     sizeLabel.style.textTransform = 'uppercase';
     sizeLabel.style.letterSpacing = '0.02em';
     sizeLabel.style.fontWeight = '700';
-    body.appendChild(sizeLabel);
+    settingsPanel.appendChild(sizeLabel);
 
     const sizeRow = document.createElement('div');
     sizeRow.style.display = 'flex';
@@ -458,7 +716,171 @@
 
     sizeRow.appendChild(slider);
     sizeRow.appendChild(numberInput);
-    body.appendChild(sizeRow);
+    settingsPanel.appendChild(sizeRow);
+
+    const usageRows = document.createElement('div');
+    usageRows.style.display = 'flex';
+    usageRows.style.flexDirection = 'column';
+    usageRows.style.gap = '8px';
+    usagePanel.appendChild(usageRows);
+
+    const exportButton = document.createElement('button');
+    exportButton.type = 'button';
+    exportButton.textContent = 'Export CSV';
+    exportButton.style.marginTop = '2px';
+    exportButton.style.border = '1px solid var(--background-modifier-accent, rgba(255,255,255,0.14))';
+    exportButton.style.borderRadius = '7px';
+    exportButton.style.padding = '8px 10px';
+    exportButton.style.fontSize = '12px';
+    exportButton.style.fontWeight = '700';
+    exportButton.style.cursor = 'pointer';
+    exportButton.style.background = 'var(--background-secondary-alt, #232428)';
+    exportButton.style.color = 'var(--header-primary, #f2f3f5)';
+    exportButton.addEventListener('click', downloadHistoryCsv);
+    usagePanel.appendChild(exportButton);
+
+    function appendUsageCard(container, titleText, subtitleText, values) {
+      const card = document.createElement('div');
+      card.style.border = '1px solid var(--background-modifier-accent, rgba(255,255,255,0.1))';
+      card.style.borderRadius = '8px';
+      card.style.padding = '8px 9px';
+      card.style.background = 'var(--background-secondary-alt, #232428)';
+
+      const top = document.createElement('div');
+      top.style.display = 'flex';
+      top.style.justifyContent = 'space-between';
+      top.style.alignItems = 'center';
+      top.style.marginBottom = '6px';
+
+      const title = document.createElement('div');
+      title.textContent = titleText;
+      title.style.fontSize = '13px';
+      title.style.fontWeight = '700';
+      title.style.color = 'var(--header-primary, #f2f3f5)';
+
+      const subtitle = document.createElement('div');
+      subtitle.textContent = subtitleText;
+      subtitle.style.fontSize = '11px';
+      subtitle.style.fontWeight = '600';
+      subtitle.style.color = 'var(--text-muted, #aeb3ba)';
+
+      top.appendChild(title);
+      top.appendChild(subtitle);
+      card.appendChild(top);
+
+      const stats = document.createElement('div');
+      stats.style.display = 'grid';
+      stats.style.gridTemplateColumns = '1fr 1fr 1fr';
+      stats.style.gap = '8px';
+
+      const openCell = document.createElement('div');
+      openCell.style.display = 'flex';
+      openCell.style.flexDirection = 'column';
+      const openLabel = document.createElement('span');
+      openLabel.textContent = 'Open';
+      openLabel.style.fontSize = '11px';
+      openLabel.style.color = 'var(--text-muted, #aeb3ba)';
+      const openValue = document.createElement('span');
+      openValue.textContent = formatHMS(values.openMs);
+      openValue.style.fontSize = '12px';
+      openValue.style.fontWeight = '700';
+      openCell.appendChild(openLabel);
+      openCell.appendChild(openValue);
+
+      const focusCell = document.createElement('div');
+      focusCell.style.display = 'flex';
+      focusCell.style.flexDirection = 'column';
+      const focusLabel = document.createElement('span');
+      focusLabel.textContent = 'Focus';
+      focusLabel.style.fontSize = '11px';
+      focusLabel.style.color = 'var(--text-muted, #aeb3ba)';
+      const focusValue = document.createElement('span');
+      focusValue.textContent = formatHMS(values.focusedMs);
+      focusValue.style.fontSize = '12px';
+      focusValue.style.fontWeight = '700';
+      focusCell.appendChild(focusLabel);
+      focusCell.appendChild(focusValue);
+
+      const switchesCell = document.createElement('div');
+      switchesCell.style.display = 'flex';
+      switchesCell.style.flexDirection = 'column';
+      const switchesLabel = document.createElement('span');
+      switchesLabel.textContent = 'Switches';
+      switchesLabel.style.fontSize = '11px';
+      switchesLabel.style.color = 'var(--text-muted, #aeb3ba)';
+      const switchesValue = document.createElement('span');
+      switchesValue.textContent = String(values.switches);
+      switchesValue.style.fontSize = '12px';
+      switchesValue.style.fontWeight = '700';
+      switchesCell.appendChild(switchesLabel);
+      switchesCell.appendChild(switchesValue);
+
+      stats.appendChild(openCell);
+      stats.appendChild(focusCell);
+      stats.appendChild(switchesCell);
+      card.appendChild(stats);
+      container.appendChild(card);
+    }
+
+    function renderUsageRows() {
+      usageRows.replaceChildren();
+
+      const yesterdayKey = dateKeyDaysAgo(1);
+      const yesterday = history.days[yesterdayKey] || { openMs: 0, focusedMs: 0, switches: 0 };
+      appendUsageCard(usageRows, 'Yesterday', yesterdayKey, yesterday);
+
+      const weeklyDateKeys = new Set();
+      for (let i = 0; i < 7; i += 1) {
+        weeklyDateKeys.add(dateKeyDaysAgo(i));
+      }
+      const weeklyEntries = allHistoryEntries().filter((entry) => weeklyDateKeys.has(entry.dateKey));
+      const weeklyAverage = averageEntries(weeklyEntries);
+      appendUsageCard(
+        usageRows,
+        'Weekly average',
+        weeklyAverage.days ? `${weeklyAverage.days} day${weeklyAverage.days === 1 ? '' : 's'}` : 'No data',
+        weeklyAverage
+      );
+
+      const allEntries = allHistoryEntries();
+      const allTimeAverage = averageEntries(allEntries);
+      appendUsageCard(
+        usageRows,
+        'All-time average',
+        allTimeAverage.days ? `${allTimeAverage.days} day${allTimeAverage.days === 1 ? '' : 's'}` : 'No data',
+        allTimeAverage
+      );
+    }
+
+    function setActiveTab(tab) {
+      const settingsActive = tab === 'settings';
+      activePopupTab = settingsActive ? 'settings' : 'usage';
+      settingsPanel.style.display = settingsActive ? 'flex' : 'none';
+      usagePanel.style.display = settingsActive ? 'none' : 'flex';
+
+      tabSettings.style.color = settingsActive
+        ? 'var(--interactive-active, #ffffff)'
+        : 'var(--interactive-normal, #b5bac1)';
+      tabUsage.style.color = settingsActive
+        ? 'var(--interactive-normal, #b5bac1)'
+        : 'var(--interactive-active, #ffffff)';
+      tabSettings.style.boxShadow = settingsActive
+        ? 'inset 0 -2px 0 var(--brand-500, #5865f2)'
+        : 'none';
+      tabUsage.style.boxShadow = settingsActive
+        ? 'none'
+        : 'inset 0 -2px 0 var(--brand-500, #5865f2)';
+
+      if (!settingsActive) {
+        renderUsageRows();
+      }
+    }
+
+    tabSettings.addEventListener('click', () => setActiveTab('settings'));
+    tabUsage.addEventListener('click', () => setActiveTab('usage'));
+
+    refreshPopupUsage = renderUsageRows;
+    setActiveTab('settings');
 
     const onPointerDown = (event) => {
       const target = event.target;
@@ -501,6 +923,34 @@
     });
 
     return panel;
+  }
+
+  function refreshPopupForThemeChange() {
+    if (isRefreshingPopupTheme) return;
+    if (!(popupEl instanceof HTMLElement) || !(popupAnchorEl instanceof HTMLElement)) return;
+    if (!document.body.contains(popupAnchorEl)) return;
+
+    isRefreshingPopupTheme = true;
+    try {
+      const anchor = popupAnchorEl;
+      const tab = activePopupTab;
+      closePopup();
+
+      popupAnchorEl = anchor;
+      popupEl = buildPopup(anchor);
+      document.body.appendChild(popupEl);
+      anchor.setAttribute('aria-expanded', 'true');
+      positionPopup();
+
+      if (tab === 'usage') {
+        const usageTab = popupEl.querySelector('[data-tm-tab="usage"]');
+        if (usageTab instanceof HTMLElement) {
+          usageTab.click();
+        }
+      }
+    } finally {
+      isRefreshingPopupTheme = false;
+    }
   }
 
   function togglePopup(anchorEl) {
@@ -568,12 +1018,16 @@
   let lastTick = Date.now();
   let wasActive = isActive();
 
+  syncHistoryFromLegacyStorage();
+  recordCurrentDayHistory();
+
   function tick() {
     const now = Date.now();
 
     // Reset on day rollover
     const k = todayKey();
     if (k !== key) {
+      recordCurrentDayHistory();
       key = k;
       focusedMs = loadFocusedMs(key);
       openMs = loadOpenMs(key);
@@ -603,6 +1057,8 @@
       saveFocusedMs(key, focusedMs);
     }
 
+    recordCurrentDayHistory();
+
     render();
   }
 
@@ -613,6 +1069,9 @@
     }
     if (popupAnchorEl instanceof HTMLElement && !document.body.contains(popupAnchorEl)) {
       closePopup();
+    }
+    if (typeof refreshPopupUsage === 'function') {
+      refreshPopupUsage();
     }
 
     const titleEl = findTitleEl();
@@ -659,6 +1118,21 @@
 
     // Route changes in Discord SPA
     window.addEventListener('popstate', () => render());
+
+    const systemTheme = window.matchMedia(SYSTEM_THEME_QUERY);
+    const handleThemeChange = () => {
+      refreshPopupForThemeChange();
+      scheduleRender();
+    };
+    systemTheme.addEventListener('change', handleThemeChange);
+
+    const rootThemeObserver = new MutationObserver(() => {
+      handleThemeChange();
+    });
+    rootThemeObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['class', 'style', 'data-theme']
+    });
   }
 
   if (document.readyState === 'loading') {
