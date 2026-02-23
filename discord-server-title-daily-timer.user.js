@@ -750,7 +750,7 @@
       top.style.display = 'flex';
       top.style.justifyContent = 'space-between';
       top.style.alignItems = 'center';
-      top.style.marginBottom = '6px';
+      top.style.marginBottom = '4px';
 
       const title = document.createElement('div');
       title.textContent = titleText;
@@ -776,6 +776,7 @@
       const openCell = document.createElement('div');
       openCell.style.display = 'flex';
       openCell.style.flexDirection = 'column';
+      openCell.style.rowGap = '2px';
       const openLabel = document.createElement('span');
       openLabel.textContent = 'Open';
       openLabel.style.fontSize = '11px';
@@ -790,6 +791,7 @@
       const focusCell = document.createElement('div');
       focusCell.style.display = 'flex';
       focusCell.style.flexDirection = 'column';
+      focusCell.style.rowGap = '2px';
       const focusLabel = document.createElement('span');
       focusLabel.textContent = 'Focus';
       focusLabel.style.fontSize = '11px';
@@ -804,6 +806,7 @@
       const switchesCell = document.createElement('div');
       switchesCell.style.display = 'flex';
       switchesCell.style.flexDirection = 'column';
+      switchesCell.style.rowGap = '2px';
       const switchesLabel = document.createElement('span');
       switchesLabel.textContent = 'Switches';
       switchesLabel.style.fontSize = '11px';
