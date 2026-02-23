@@ -10,23 +10,23 @@ It adds a daily usage timer to the top title bar and tracks:
 
 Click the clock icon in the top-right header to open settings.
 
+Top header timer (`open | focus | switches`):
+
+![Discord Daily Timer header (light)](./assets/demo/demonstration-header-light.png)
+
+![Discord Daily Timer header (dark)](./assets/demo/demonstration-header-dark.png)
+
 Settings tab:
 
-![Discord Daily Timer settings tab (light)](./demonstration-settings-light.png)
+![Discord Daily Timer settings tab (light)](./assets/demo/demonstration-settings-light.png)
 
-![Discord Daily Timer settings tab (dark)](./demonstration-settings-dark.png)
+![Discord Daily Timer settings tab (dark)](./assets/demo/demonstration-settings-dark.png)
 
 Usage tab:
 
-![Discord Daily Timer usage tab (light)](./demonstration-usage-light.png)
+![Discord Daily Timer usage tab (light)](./assets/demo/demonstration-usage-light.png)
 
-![Discord Daily Timer usage tab (dark)](./demonstration-usage-dark.png)
-
-Top header timer (`open | focus | switches`):
-
-![Discord Daily Timer header (light)](./demonstration-header-light.png)
-
-![Discord Daily Timer header (dark)](./demonstration-header-dark.png)
+![Discord Daily Timer usage tab (dark)](./assets/demo/demonstration-usage-dark.png)
 
 ## Dev helper: sync to Tampermonkey with CDP
 
