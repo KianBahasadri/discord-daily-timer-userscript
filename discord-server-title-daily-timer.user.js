@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Discord Server Title + Daily Timer
-// @version      1.11.0
+// @version      1.11.6
 // @description  Replace server title and show today's Discord time
 // @match        https://discord.com/channels/*
 // @run-at       document-idle
@@ -109,42 +109,72 @@
     return SWITCH_STORAGE_PREFIX + dateKey;
   }
 
+  function safeGetStorageItem(keyName) {
+    try {
+      return localStorage.getItem(keyName);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function safeSetStorageItem(keyName, value) {
+    try {
+      localStorage.setItem(keyName, value);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function safeStorageKeys() {
+    try {
+      const keys = [];
+      for (let i = 0; i < localStorage.length; i += 1) {
+        const keyName = localStorage.key(i);
+        if (keyName) keys.push(keyName);
+      }
+      return keys;
+    } catch (_) {
+      return [];
+    }
+  }
+
   function loadFocusedMs(dateKey) {
-    let raw = localStorage.getItem(focusedStorageKey(dateKey));
+    let raw = safeGetStorageItem(focusedStorageKey(dateKey));
     if (raw === null) {
-      raw = localStorage.getItem(legacyFocusedStorageKey(dateKey));
+      raw = safeGetStorageItem(legacyFocusedStorageKey(dateKey));
     }
     const n = Number(raw);
     return Number.isFinite(n) && n >= 0 ? n : 0;
   }
 
   function saveFocusedMs(dateKey, ms) {
-    localStorage.setItem(focusedStorageKey(dateKey), String(Math.floor(ms)));
+    safeSetStorageItem(focusedStorageKey(dateKey), String(Math.floor(ms)));
   }
 
   function loadOpenMs(dateKey) {
-    const raw = localStorage.getItem(openStorageKey(dateKey));
+    const raw = safeGetStorageItem(openStorageKey(dateKey));
     const n = Number(raw);
     return Number.isFinite(n) && n >= 0 ? n : 0;
   }
 
   function saveOpenMs(dateKey, ms) {
-    localStorage.setItem(openStorageKey(dateKey), String(Math.floor(ms)));
+    safeSetStorageItem(openStorageKey(dateKey), String(Math.floor(ms)));
   }
 
   function loadSwitchCount(dateKey) {
-    const raw = localStorage.getItem(switchStorageKey(dateKey));
+    const raw = safeGetStorageItem(switchStorageKey(dateKey));
     const n = Number(raw);
     return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0;
   }
 
   function saveSwitchCount(dateKey, count) {
-    localStorage.setItem(switchStorageKey(dateKey), String(Math.floor(count)));
+    safeSetStorageItem(switchStorageKey(dateKey), String(Math.floor(count)));
   }
 
   function loadHistory() {
     try {
-      const raw = localStorage.getItem(HISTORY_STORAGE_KEY);
+      const raw = safeGetStorageItem(HISTORY_STORAGE_KEY);
       if (!raw) return { days: {} };
       const parsed = JSON.parse(raw);
       if (!parsed || typeof parsed !== 'object' || !parsed.days || typeof parsed.days !== 'object') {
@@ -169,7 +199,7 @@
   }
 
   function saveHistory() {
-    localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(history));
+    safeSetStorageItem(HISTORY_STORAGE_KEY, JSON.stringify(history));
   }
 
   function dateKeyFromStorageKey(storageKey, prefix) {
@@ -180,8 +210,8 @@
 
   function collectKnownDateKeysFromStorage() {
     const keys = new Set(Object.keys(history.days || {}));
-    for (let i = 0; i < localStorage.length; i += 1) {
-      const storageKey = localStorage.key(i);
+    const storageKeys = safeStorageKeys();
+    for (const storageKey of storageKeys) {
       if (!storageKey) continue;
       const dateKey =
         dateKeyFromStorageKey(storageKey, FOCUSED_STORAGE_PREFIX)
@@ -292,7 +322,7 @@
   function loadSettings() {
     let parsed = {};
     try {
-      const raw = localStorage.getItem(SETTINGS_STORAGE_KEY);
+      const raw = safeGetStorageItem(SETTINGS_STORAGE_KEY);
       if (raw) parsed = JSON.parse(raw);
     } catch (_) {
       parsed = {};
@@ -306,7 +336,7 @@
   }
 
   function saveSettings() {
-    localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+    safeSetStorageItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
   }
 
   function formatHMS(ms) {
@@ -321,30 +351,27 @@
     return !document.hidden && document.hasFocus();
   }
 
-  function findTitleEl() {
-    const selectors = [
-      // Most stable: guild icon + title sibling in the header button
-      'div[role="button"] div[class*="guildIcon_"] + div[data-text-variant]',
-      // Common quick-switcher title text node
-      'div[role="button"][aria-label] div[data-text-variant][class*="lineClamp1"]',
-      // Broad fallback
-      'div[role="button"][aria-label] div[data-text-variant]'
-    ];
+  function isVisibleElement(el) {
+    return el instanceof HTMLElement && el.getClientRects().length > 0;
+  }
 
-    for (const selector of selectors) {
-      const nodes = document.querySelectorAll(selector);
-      for (const node of nodes) {
-        if (!(node instanceof HTMLElement)) continue;
-        if (node.getClientRects().length === 0) continue;
-        return node;
-      }
+  function findTitleEl() {
+    const preferredButton = document.querySelector('div[class*="guildDropdown_"][role="button"], [aria-label*="server actions" i]');
+    if (preferredButton instanceof HTMLElement) {
+      const local = preferredButton.querySelector('h2, [class*="name_"], [data-text-variant], [class*="lineClamp1"]');
+      if (local instanceof HTMLElement && isVisibleElement(local)) return local;
     }
 
+    const fallback = document.querySelector('[aria-label*="server actions" i] h2, div[class*="guildDropdown_"] h2');
+    if (fallback instanceof HTMLElement && isVisibleElement(fallback)) return fallback;
     return null;
   }
 
   function setGuildIconHidden(hidden) {
-    const icon = document.querySelector('div[role="button"] div[class*="guildIcon_"]');
+    const preferredButton = document.querySelector('div[class*="guildDropdown_"][role="button"], div[class*="guildDropdown_"]');
+    const icon = preferredButton instanceof HTMLElement
+      ? preferredButton.querySelector('div[class*="guildIcon_"]')
+      : document.querySelector('div[role="button"] div[class*="guildIcon_"]');
     if (!(icon instanceof HTMLElement)) return;
     if (hidden) {
       if (!icon.hasAttribute('data-tm-icon-hidden')) {
@@ -1065,6 +1092,14 @@
     render();
   }
 
+  function safeTick() {
+    try {
+      tick();
+    } catch (_) {
+      render();
+    }
+  }
+
   function render() {
     ensureGearButton();
     if (tooltipAnchorEl instanceof HTMLElement && !document.body.contains(tooltipAnchorEl)) {
@@ -1077,21 +1112,24 @@
       refreshPopupUsage();
     }
 
-    const titleEl = findTitleEl();
-    if (!titleEl) return;
     const gap = '\u00A0\u00A0\u00A0\u00A0\u00A0';
     const parts = [];
     if (settings.showOpen) parts.push(`${formatHMS(openMs)} open`);
     if (settings.showFocus) parts.push(`${formatHMS(focusedMs)} focus`);
     if (settings.showSwitches) parts.push(`${switchCount} switches`);
+
+    const titleEl = findTitleEl();
     if (parts.length === 0) {
       setGuildIconHidden(false);
-      restoreNativeTitle(titleEl);
+      if (titleEl) restoreNativeTitle(titleEl);
       return;
     }
-    setGuildIconHidden(true);
+
     const nextText = parts.join(`${gap}|${gap}`);
-    applyCustomTitle(titleEl, nextText);
+    if (titleEl) {
+      setGuildIconHidden(false);
+      applyCustomTitle(titleEl, nextText);
+    }
   }
 
   let renderScheduled = false;
@@ -1106,18 +1144,20 @@
 
   function boot() {
     render();
+    setTimeout(() => render(), 300);
+    setTimeout(() => render(), 1200);
 
     // Keep text through React rerenders
     const observer = new MutationObserver(() => scheduleRender());
     observer.observe(document.body, { childList: true, subtree: true });
 
     // Live timer
-    setInterval(tick, 1000);
+    setInterval(safeTick, 1000);
 
     // Repaint immediately on focus/visibility changes
-    window.addEventListener('focus', () => { tick(); });
-    window.addEventListener('blur', () => { tick(); });
-    document.addEventListener('visibilitychange', () => { tick(); });
+    window.addEventListener('focus', () => { safeTick(); });
+    window.addEventListener('blur', () => { safeTick(); });
+    document.addEventListener('visibilitychange', () => { safeTick(); });
 
     // Route changes in Discord SPA
     window.addEventListener('popstate', () => render());
